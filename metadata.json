@@ -1,0 +1,7 @@
+{
+  "name": "Desafío Saludable App",
+  "description": "A mobile-first web application to track healthy challenges, fines, and evidence among friend groups.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

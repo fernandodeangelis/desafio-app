@@ -1,0 +1,45 @@
+services:
+  # 1. Base de Datos
+  db:
+    image: postgres:15-alpine
+    container_name: desafio_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: adminpassword
+      POSTGRES_DB: desafio_saludable
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./server/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  # 2. Backend API
+  api:
+    build: ./server
+    container_name: desafio_api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgres://admin:adminpassword@db:5432/desafio_saludable
+      - JWT_SECRET=supersecretkey_change_this_in_prod
+      - PORT=3000
+    volumes:
+      - ./server/uploads:/usr/src/app/uploads
+    depends_on:
+      - db
+
+  # 3. Frontend + Reverse Proxy
+  web:
+    build: .
+    container_name: desafio_web
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    volumes:
+      # Mapeamos la carpeta de uploads del server al nginx para servir las imágenes
+      - ./server/uploads:/usr/share/nginx/html/uploads
+
+volumes:
+  postgres_data:
