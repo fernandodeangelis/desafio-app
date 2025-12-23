@@ -13,11 +13,20 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3000;
-const secret = process.env.JWT_SECRET || 'secret';
+const secret = process.env.JWT_SECRET || 'secret_key_123';
 
 // Database Pool
 const pool = new pg.Pool({
     connectionString: process.env.DATABASE_URL
+});
+
+// Test connection on startup
+pool.query('SELECT NOW()', (err, res) => {
+    if (err) {
+        console.error('CRITICAL: Database connection failed!', err.message);
+    } else {
+        console.log('SUCCESS: Database connected at', res.rows[0].now);
+    }
 });
 
 // Middleware
@@ -58,13 +67,17 @@ app.post('/auth/login', async (req, res) => {
         if (!valid) return res.status(401).json({ error: 'Contraseña incorrecta' });
 
         const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, secret);
-        res.json({ user: { id: user.id, username: user.username, email: user.email, role: user.role }, token });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+        res.json({ user: { id: user.id.toString(), username: user.username, email: user.email, role: user.role }, token });
+    } catch (e) { 
+        console.error("Login error:", e);
+        res.status(500).json({ error: e.message }); 
+    }
 });
 
 app.post('/auth/register', async (req, res) => {
     try {
         const { username, email, password } = req.body;
+        console.log(`Registering user: ${username}`);
         const hash = await bcrypt.hash(password, 10);
         const result = await pool.query(
             'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email, role',
@@ -72,8 +85,11 @@ app.post('/auth/register', async (req, res) => {
         );
         const user = result.rows[0];
         const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, secret);
-        res.json({ user: { id: user.id.toString(), ...user }, token });
-    } catch (e) { res.status(500).json({ error: 'Error al registrar. Usuario o email ya existen.' }); }
+        res.json({ user: { ...user, id: user.id.toString() }, token });
+    } catch (e) { 
+        console.error("Registration error details:", e);
+        res.status(500).json({ error: `Error en el registro: ${e.message}` }); 
+    }
 });
 
 // GROUPS
@@ -86,7 +102,6 @@ app.get('/groups', async (req, res) => {
              WHERE p.user_id = $1`, 
              [userId]
         );
-        // Map snake_case DB to camelCase JS
         const groups = result.rows.map(g => ({
             id: g.id.toString(),
             name: g.name,
@@ -114,7 +129,6 @@ app.post('/groups', async (req, res) => {
             );
             const group = groupRes.rows[0];
             
-            // Get username
             const userRes = await client.query('SELECT username FROM users WHERE id = $1', [userId]);
             const username = userRes.rows[0].username;
 
@@ -165,7 +179,12 @@ app.post('/groups/join', async (req, res) => {
                 "INSERT INTO logs (group_id, message, type) VALUES ($1, $2, 'INFO')",
                 [group.id, `${username} se unió al grupo`]
             );
-            res.json(group);
+            res.json({
+                ...group,
+                id: group.id.toString(),
+                adminId: group.admin_id.toString(),
+                encargadoId: group.encargado_id.toString()
+            });
         } catch (e) { res.status(400).json({ error: 'Ya eres miembro' }); }
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -175,28 +194,24 @@ app.get('/participants', async (req, res) => {
     try {
         const { groupId } = req.query;
         const result = await pool.query('SELECT * FROM participants WHERE group_id = $1', [groupId]);
-        const participants = result.rows.map(p => ({
+        res.json(result.rows.map(p => ({
             userId: p.user_id.toString(),
             groupId: p.group_id.toString(),
             username: p.username,
             accumulatedFine: p.accumulated_fine,
             currentObjective: p.current_objective,
             hasWildcard: p.has_wildcard
-        }));
-        res.json(participants);
+        })));
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.put('/participants', async (req, res) => {
     try {
         const { groupId, userId, updates } = req.body;
-        // Build dynamic query
         const keys = Object.keys(updates);
         if (keys.length === 0) return res.json({ success: true });
 
-        // Map frontend camelCase to snake_case
         const map = { accumulatedFine: 'accumulated_fine', currentObjective: 'current_objective' };
-        
         const setClause = keys.map((k, i) => `${map[k] || k} = $${i + 3}`).join(', ');
         const values = [groupId, userId, ...keys.map(k => updates[k])];
         
@@ -306,7 +321,6 @@ app.put('/challenges/:id', async (req, res) => {
             await client.query('UPDATE challenges SET status = $1 WHERE id = $2', [status, id]);
             
             if (loserId && fineAmount) {
-                // Get group id
                 const cRes = await client.query('SELECT group_id, challenger_name, challenged_name, challenger_id FROM challenges WHERE id = $1', [id]);
                 const challenge = cRes.rows[0];
                 const groupId = challenge.group_id;
@@ -316,7 +330,6 @@ app.put('/challenges/:id', async (req, res) => {
                     [fineAmount, loserId, groupId]
                 );
                 
-                // Get loser name
                 const loserName = loserId == challenge.challenger_id ? challenge.challenger_name : challenge.challenged_name;
                 await client.query(
                     "INSERT INTO logs (group_id, message, type) VALUES ($1, $2, 'DANGER')",
@@ -352,43 +365,33 @@ app.get('/logs', async (req, res) => {
 // WEEK CLOSING
 app.post('/groups/:id/check-week', async (req, res) => {
     const groupId = req.params.id;
-    // Calculate previous week ID
     const today = new Date();
     const prevDate = new Date(today);
     prevDate.setDate(today.getDate() - 7);
     const prevWeekId = getWeekId(prevDate);
 
     try {
-        // Check if closed
         const check = await pool.query('SELECT * FROM closed_weeks WHERE group_id = $1 AND week_id = $2', [groupId, prevWeekId]);
         if (check.rows.length > 0) return res.json({ processed: false, message: 'Semana ya cerrada' });
 
-        // Logic
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
-
             const groupRes = await client.query('SELECT * FROM groups WHERE id = $1', [groupId]);
             const group = groupRes.rows[0];
             
-            // Check creation date to avoid retroactive closing
             if (new Date(group.created_at) > prevDate) {
                  await client.query('ROLLBACK');
                  return res.json({ processed: false });
             }
 
-            // Get Participants
             const pRes = await client.query('SELECT user_id, username FROM participants WHERE group_id = $1', [groupId]);
-            
-            // Get Approved Evidence
             const eRes = await client.query(
                 "SELECT user_id FROM evidence WHERE group_id = $1 AND week_id = $2 AND status = 'APPROVED'", 
                 [groupId, prevWeekId]
             );
-            const approvedIds = eRes.rows.map(r => r.user_id);
-
-            // Defaulters
-            const defaulters = pRes.rows.filter(p => !approvedIds.includes(p.user_id));
+            const approvedIds = eRes.rows.map(r => r.user_id.toString());
+            const defaulters = pRes.rows.filter(p => !approvedIds.includes(p.user_id.toString()));
 
             if (defaulters.length > 0) {
                 const fine = group.current_fine_amount;
@@ -403,16 +406,9 @@ app.post('/groups/:id/check-week', async (req, res) => {
                     "INSERT INTO logs (group_id, message, type) VALUES ($1, $2, 'DANGER')",
                     [groupId, `Cierre de semana ${prevWeekId}. Multa aplicada a: ${names}`]
                 );
-            } else {
-                await client.query(
-                    "INSERT INTO logs (group_id, message, type) VALUES ($1, $2, 'SUCCESS')",
-                    [groupId, `Cierre de semana ${prevWeekId}. ¡Todos cumplieron!`]
-                );
             }
 
-            // Mark Closed
             await client.query('INSERT INTO closed_weeks (group_id, week_id) VALUES ($1, $2)', [groupId, prevWeekId]);
-
             await client.query('COMMIT');
             res.json({ processed: true, prevWeekId });
         } catch (e) {
@@ -421,7 +417,6 @@ app.post('/groups/:id/check-week', async (req, res) => {
         } finally {
             client.release();
         }
-
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

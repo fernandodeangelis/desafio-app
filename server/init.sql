@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS groups (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Tabla de Participantes (Relación Muchos a Muchos)
+-- Tabla de Participantes
 CREATE TABLE IF NOT EXISTS participants (
     user_id INTEGER REFERENCES users(id),
     group_id INTEGER REFERENCES groups(id),
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS evidence (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Tabla de Retos (Mano a Mano)
+-- Tabla de Retos
 CREATE TABLE IF NOT EXISTS challenges (
     id SERIAL PRIMARY KEY,
     group_id INTEGER REFERENCES groups(id),
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS challenges (
     status VARCHAR(30) DEFAULT 'PENDING'
 );
 
--- Tabla de Logs/Auditoría
+-- Tabla de Logs
 CREATE TABLE IF NOT EXISTS logs (
     id SERIAL PRIMARY KEY,
     group_id INTEGER REFERENCES groups(id),
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS logs (
     type VARCHAR(20) DEFAULT 'INFO'
 );
 
--- Control de Semanas Cerradas
+-- Tabla de Semanas Cerradas
 CREATE TABLE IF NOT EXISTS closed_weeks (
     group_id INTEGER REFERENCES groups(id),
     week_id VARCHAR(20),
